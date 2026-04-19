@@ -1,5 +1,7 @@
 # Pin Usage Analyzer — EAGLE ULP Script
 
+<img width="1662" height="1281" alt="Screenshot " src="https://github.com/user-attachments/assets/99d8241c-d642-4b79-a9c7-a7a4b6e291f3" />
+
 ## Overview
 
 **Pin Usage Analyzer** is a User Language Program (ULP) for Autodesk EAGLE / Fusion 360 Electronics.  
