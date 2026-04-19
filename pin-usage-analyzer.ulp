@@ -1,0 +1,390 @@
+#usage "Pin Usage Analyzer<br>"
+       "Shows used/unused pins with colored cells, filtering, sorting.<br>"
+       "Select Source and Target components, click Analyze.<br>"
+       "<author>ULP Script</author>"
+
+// ═══════════════════════════════════════════════════════════════
+//  Global variables
+// ═══════════════════════════════════════════════════════════════
+
+string srcLabels[];
+string srcNames[];
+int nSrc = 0;
+int selSource = 0;
+
+string tgtLabels[];
+string tgtNames[];
+int nTgt = 0;
+int selTarget = 0;
+
+string filterText = "";
+int filterStatus = 0;
+string filterStatusOpts[] = {"All", "Connected", "Free (N/C)"};
+
+int sortColSel = 0;
+string sortColOpts[] = {"Component Name", "Pin # (num)", "Pin Name", "Net Name", "Target Pin", "Target Component"};
+int sortDirSel = 0;
+string sortDirOpts[] = {"Ascending", "Descending"};
+
+// Source pin data
+string sPad[];
+string sPin[];
+string sNet[];
+int sCnt = 0;
+
+// Connection data (one record per connection)
+int cIdx[];
+string cTP[];
+string cTD[];
+string cTV[];
+int cCnt = 0;
+
+// Display data (filtered+sorted, one row per source pin)
+string dPad[];
+string dPin[];
+string dNet[];
+string dTP[];
+string dTD[];
+int dCnt = 0;
+
+string htmlResult = "<html><body><p>Select <b>Source Component</b> and click <b>Analyze</b></p></body></html>";
+string statsText = "Ready";
+
+int exportFmt = 0;
+string exportFmtOpts[] = {"CSV (.csv)", "Text (.txt)", "HTML (.html)"};
+
+// ═══════════════════════════════════════════════════════════════
+void collectParts(void) {
+    schematic(SCH) {
+        SCH.parts(P) {
+            srcNames[nSrc] = P.name;
+            if (P.value != "")
+                srcLabels[nSrc] = P.name + " (" + P.value + ")";
+            else
+                srcLabels[nSrc] = P.name;
+            nSrc++;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+void rebuildTargetCombo(void) {
+    for (int rc = 0; rc <= nTgt + 1; rc++) {
+        tgtLabels[rc] = "";
+        tgtNames[rc] = "";
+    }
+    nTgt = 0;
+    tgtLabels[0] = "All elements";
+    tgtNames[0] = "";
+    nTgt = 1;
+    for (int ri = 0; ri < nSrc; ri++) {
+        if (ri != selSource) {
+            tgtLabels[nTgt] = srcLabels[ri];
+            tgtNames[nTgt] = srcNames[ri];
+            nTgt++;
+        }
+    }
+    tgtLabels[nTgt] = "";
+    selTarget = 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+void analyzePart(void) {
+    sCnt = 0;
+    cCnt = 0;
+    string pn = srcNames[selSource];
+
+    schematic(SCH) {
+        SCH.parts(P) {
+            if (P.name == pn) {
+                P.instances(I) {
+                    I.gate.symbol.pins(PIN) {
+                        string pad = "";
+                        PIN.contacts(C) { pad = C.name; }
+                        sPad[sCnt] = pad;
+                        sPin[sCnt] = PIN.name;
+                        sNet[sCnt] = PIN.net;
+                        sCnt++;
+                    }
+                }
+            }
+        }
+
+        for (int ai = 0; ai < sCnt; ai++) {
+            if (sNet[ai] != "") {
+                SCH.nets(N) {
+                    if (N.name == sNet[ai]) {
+                        N.pinrefs(PR) {
+                            if (PR.part.name != pn) {
+                                cIdx[cCnt] = ai;
+                                cTP[cCnt] = PR.pin.name;
+                                cTD[cCnt] = PR.part.name;
+                                cTV[cCnt] = PR.part.value;
+                                cCnt++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+void buildDisplay(void) {
+    dCnt = 0;
+    string tgtF = "";
+    if (selTarget > 0 && selTarget < nTgt)
+        tgtF = tgtNames[selTarget];
+    string txtF = strupr(filterText);
+    int specificTarget = (tgtF != "") ? 1 : 0;
+
+    for (int bi = 0; bi < sCnt; bi++) {
+        string tp = "";
+        string td = "";
+
+        for (int bj = 0; bj < cCnt; bj++) {
+            if (cIdx[bj] != bi) continue;
+            if (specificTarget && cTD[bj] != tgtF) continue;
+
+            string dl;
+            if (cTV[bj] != "")
+                dl = cTD[bj] + " (" + cTV[bj] + ")";
+            else
+                dl = cTD[bj];
+
+            if (tp != "") {
+                tp += "<br>" + cTP[bj];
+                if (!specificTarget) td += "<br>" + dl;
+            } else {
+                tp = cTP[bj];
+                td = dl;
+            }
+        }
+
+        int isC = (sNet[bi] != "") ? 1 : 0;
+        if (filterStatus == 1 && !isC) continue;
+        if (filterStatus == 2 && isC) continue;
+
+        if (specificTarget && isC && tp == "") continue;
+
+        if (txtF != "") {
+            string cmb;
+            sprintf(cmb, "%s %s %s %s %s", sPad[bi], sPin[bi], sNet[bi], tp, td);
+            if (strstr(strupr(cmb), txtF) < 0) continue;
+        }
+
+        dPad[dCnt] = sPad[bi];
+        dPin[dCnt] = sPin[bi];
+        dNet[dCnt] = sNet[bi];
+        dTP[dCnt] = tp;
+        dTD[dCnt] = td;
+        dCnt++;
+    }
+
+    // Sort
+    int asc = (sortDirSel == 0) ? 1 : 0;
+    for (int si = 0; si < dCnt - 1; si++) {
+        for (int sj = 0; sj < dCnt - 1 - si; sj++) {
+            string va, vb;
+            if (sortColSel == 0)      { va = dPad[sj]; vb = dPad[sj+1]; }
+            else if (sortColSel == 1) { va = dPad[sj]; vb = dPad[sj+1]; }
+            else if (sortColSel == 2) { va = dPin[sj]; vb = dPin[sj+1]; }
+            else if (sortColSel == 3) { va = dNet[sj]; vb = dNet[sj+1]; }
+            else if (sortColSel == 4) { va = dTP[sj];  vb = dTP[sj+1]; }
+            else                      { va = dTD[sj];  vb = dTD[sj+1]; }
+
+            int sw = 0;
+            if (sortColSel == 1) {
+                int na = (va == "") ? 9999 : strtol(va);
+                int nb = (vb == "") ? 9999 : strtol(vb);
+                if (asc) sw = (na > nb); else sw = (na < nb);
+            } else {
+                if (asc) sw = (va > vb); else sw = (va < vb);
+            }
+
+            if (sw) {
+                string t;
+                t = dPad[sj]; dPad[sj] = dPad[sj+1]; dPad[sj+1] = t;
+                t = dPin[sj]; dPin[sj] = dPin[sj+1]; dPin[sj+1] = t;
+                t = dNet[sj]; dNet[sj] = dNet[sj+1]; dNet[sj+1] = t;
+                t = dTP[sj];  dTP[sj]  = dTP[sj+1];  dTP[sj+1]  = t;
+                t = dTD[sj];  dTD[sj]  = dTD[sj+1];  dTD[sj+1]  = t;
+            }
+        }
+    }
+
+    // Stats
+    int nc = 0;
+    int nf = 0;
+    for (int sk = 0; sk < sCnt; sk++) {
+        if (sNet[sk] == "") nf++; else nc++;
+    }
+    sprintf(statsText, "%s  |  Total: %d  |  Connected: %d  |  Free: %d  |  Shown: %d",
+            srcNames[selSource], sCnt, nc, nf, dCnt);
+
+    // Build HTML table
+    string srcDev = srcLabels[selSource];
+    string s;
+    string h = "<html><body style='font-family:Consolas,monospace;font-size:9pt;margin:0;padding:0;'>";
+    h += "<table border='1' cellpadding='3' cellspacing='0' width='100%' style='border-collapse:collapse;'>";
+    h += "<tr bgcolor='#C0C0C0'>"
+         "<td width='12%'><b>Component Name</b></td>"
+         "<td width='5%' align='center'><b>Pin #</b></td>"
+         "<td width='9%'><b>Pin Name</b></td>"
+         "<td width='12%'><b>Net Name</b></td>"
+         "<td width='2%'>&nbsp;</td>"
+         "<td width='2%'>&nbsp;</td>"
+         "<td width='2%'>&nbsp;</td>"
+         "<td width='13%'><b>Target Pin</b></td>"
+         "<td width='20%'><b>Target Component</b></td>"
+         "</tr>";
+
+    for (int sm = 0; sm < dCnt; sm++) {
+        string bg, nd;
+        if (dNet[sm] == "") {
+            bg = "#88DD88";
+            nd = "N/C";
+        } else {
+            bg = "#FFEE77";
+            nd = dNet[sm];
+        }
+        sprintf(s, "<tr>"
+                   "<td valign='top'>%s</td>"
+                   "<td align='center'>%s</td>"
+                   "<td>%s</td>"
+                   "<td bgcolor='%s'>%s</td>"
+                   "<td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>"
+                   "<td valign='top'>%s</td>"
+                   "<td valign='top'>%s</td>"
+                   "</tr>",
+                srcDev, dPad[sm], dPin[sm], bg, nd, dTP[sm], dTD[sm]);
+        h += s;
+    }
+    h += "</table></body></html>";
+    htmlResult = h;
+}
+
+// ═══════════════════════════════════════════════════════════════
+void resetAll(void) {
+    filterText = "";
+    filterStatus = 0;
+    sortColSel = 0;
+    sortDirSel = 0;
+    selTarget = 0;
+    if (sCnt > 0) buildDisplay();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN
+// ═══════════════════════════════════════════════════════════════
+
+if (!schematic) {
+    dlgMessageBox("This ULP must be run from a schematic editor!");
+    exit(1);
+}
+
+collectParts();
+rebuildTargetCombo();
+
+dlgDialog("Pin Usage Analyzer") {
+    dlgHBoxLayout {
+        dlgLabel("Source:");
+        dlgComboBox(srcLabels, selSource) {
+            rebuildTargetCombo();
+            dlgRedisplay();
+        }
+        dlgSpacing(12);
+        dlgLabel("Target component:");
+        dlgComboBox(tgtLabels, selTarget);
+        dlgSpacing(12);
+        dlgPushButton("Analyze") {
+            analyzePart();
+            buildDisplay();
+            dlgRedisplay();
+        }
+        dlgPushButton("Reset") {
+            resetAll();
+            dlgRedisplay();
+        }
+        dlgStretch(1);
+    }
+    dlgSpacing(4);
+    dlgHBoxLayout {
+        dlgLabel("Filter:");
+        dlgStringEdit(filterText);
+        dlgSpacing(8);
+        dlgLabel("Status:");
+        dlgComboBox(filterStatusOpts, filterStatus);
+        dlgSpacing(8);
+        dlgLabel("Sort:");
+        dlgComboBox(sortColOpts, sortColSel);
+        dlgComboBox(sortDirOpts, sortDirSel);
+        dlgSpacing(8);
+        dlgPushButton("Apply") {
+            buildDisplay();
+            dlgRedisplay();
+        }
+        dlgStretch(1);
+    }
+    dlgSpacing(4);
+    dlgLabel(statsText, 1);
+    dlgSpacing(4);
+    dlgTextView(htmlResult);
+    dlgSpacing(4);
+    dlgHBoxLayout {
+        dlgLabel("Export:");
+        dlgComboBox(exportFmtOpts, exportFmt);
+        dlgPushButton("Export") {
+            if (dCnt == 0) {
+                dlgMessageBox("No data to export. Run Analyze first.");
+            } else {
+                string ext;
+                if (exportFmt == 0) ext = ".csv";
+                else if (exportFmt == 1) ext = ".txt";
+                else ext = ".html";
+                string fn = dlgFileSave("Export Table", "", ext);
+                if (fn != "") {
+                    // Append extension if missing
+                    int fnlen = strlen(fn);
+                    if (fnlen < 4 || strsub(fn, fnlen - strlen(ext)) != ext)
+                        fn += ext;
+                    string srcDev = srcLabels[selSource];
+                    output(fn) {
+                        if (exportFmt == 2) {
+                            printf("%s", htmlResult);
+                        } else {
+                            string sep;
+                            if (exportFmt == 0) sep = ";";
+                            else sep = "\t";
+                            printf("Component Name%sPin #%sPin Name%sNet Name%s %s %s %sTarget Pin%sTarget Component\n",
+                                   sep, sep, sep, sep, sep, sep, sep, sep);
+                            for (int ei = 0; ei < dCnt; ei++) {
+                                string tpFlat = dTP[ei];
+                                string tdFlat = dTD[ei];
+                                int rp = 0;
+                                while ((rp = strstr(tpFlat, "<br>")) >= 0) {
+                                    string left = strsub(tpFlat, 0, rp);
+                                    string right = strsub(tpFlat, rp + 4);
+                                    tpFlat = left + " | " + right;
+                                }
+                                int rd = 0;
+                                while ((rd = strstr(tdFlat, "<br>")) >= 0) {
+                                    string dl = strsub(tdFlat, 0, rd);
+                                    string dr = strsub(tdFlat, rd + 4);
+                                    tdFlat = dl + " | " + dr;
+                                }
+                                string nd = (dNet[ei] == "") ? "N/C" : dNet[ei];
+                                printf("%s%s%s%s%s%s%s%s %s %s%s%s%s\n",
+                                       srcDev, sep, dPad[ei], sep, dPin[ei], sep, nd, sep, sep, sep, tpFlat, sep, tdFlat);
+                            }
+                        }
+                    }
+                    dlgMessageBox("Exported to: " + fn);
+                }
+            }
+        }
+        dlgStretch(1);
+        dlgPushButton("-Close") dlgReject();
+    }
+};
